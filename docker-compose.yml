@@ -1,0 +1,71 @@
+version: '3'
+
+services:
+  backend:
+    build:
+      context: ./backend
+      dockerfile: Dockerfile
+    image: pe-commerce-backend
+    container_name: pe-commerce-backend
+    ports:
+      - "5000:5000"
+    environment:
+      - NODE_ENV=development
+      - MONGO_URI=mongodb://root:example@mongodb:27017/e-commerce?authSource=admin
+      - JWT_SECRET=18aacb75f408e76316a0a8333b761f190e22a12aa16815cbc66515d53f28c298
+      - JWT_REFRESH_SECRET=a67b545c43b5c4de6a8f0639f4d7aa7704a851db0af5978f9cd4c158f0fb64d3
+      - JWT_ACCESS_EXPIRES_IN=15m
+      - JWT_REFRESH_EXPIRES_IN=7d
+      - JWT_COOKIE_EXPIRES_IN=15
+      - FRONTEND_URL=http://localhost:3000
+    volumes:
+      - ./backend:/app 
+      - /app/node_modules
+    depends_on:
+      - mongodb
+    restart: always
+    networks:
+      - app-network
+
+  # Frontend service
+  frontend:
+    build:
+      context: ./frontend
+      dockerfile: Dockerfile
+    image: e-commerce-frontend
+    container_name: e-commerce-frontend
+    ports:
+      - "3000:3000"
+    environment:
+      - NODE_ENV=development
+      - REACT_APP_API_URL=http://localhost:5000/api
+      - WDS_SOCKET_PORT=0  # Enables WebSocket connection for hot reloading
+    volumes:
+      - ./frontend:/app
+      - /app/node_modules
+    depends_on:
+      - backend
+    restart: always
+    networks:
+      - app-network
+
+  # MongoDB service
+  mongodb:
+    image: mongo:latest
+    ports:
+      - "27018:27017"
+    volumes:
+      - mongo-data:/data/db
+    networks:
+      - app-network
+    restart: always
+    environment:
+      - MONGO_INITDB_ROOT_USERNAME=root
+      - MONGO_INITDB_ROOT_PASSWORD=example
+
+networks:
+  app-network:
+    driver: bridge
+
+volumes:
+  mongo-data:

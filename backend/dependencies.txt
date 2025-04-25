@@ -1,0 +1,11 @@
+# Core dependencies
+npm install express mongoose dotenv cors cookie-parser morgan
+
+# Authentication & security
+npm install bcryptjs jsonwebtoken helmet express-rate-limit sanitize-html
+
+# Validation & utilities
+npm install express-validator slugify multer sharp nodemailer
+
+# Development dependencies
+npm install -D nodemon jest supertest
