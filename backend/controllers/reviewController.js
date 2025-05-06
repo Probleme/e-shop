@@ -1,28 +1,29 @@
 const Review = require('../models/Review');
 const Product = require('../models/Product');
+const User = require('../models/User');
 const ErrorResponse = require('../utils/errorResponse');
 const asyncHandler = require('../middleware/async');
 
 // @desc    Get reviews for a product
-// @route   GET /api/v1/products/:productId/reviews
+// @route   GET /api/products/:productId/reviews
 // @access  Public
 exports.getProductReviews = asyncHandler(async (req, res, next) => {
   const productId = req.params.productId;
   
-  // Check if product exists
+  // Validate product exists
   const product = await Product.findById(productId);
   if (!product) {
-    return next(new ErrorResponse(`No product found with id ${productId}`, 404));
+    return next(new ErrorResponse(`No product found with id of ${productId}`, 404));
   }
-
+  
   // Get reviews for this product
   const reviews = await Review.find({ product: productId })
+    .sort({ createdAt: -1 })
     .populate({
       path: 'user',
       select: 'name avatar'
-    })
-    .sort('-createdAt');
-
+    });
+  
   res.status(200).json({
     success: true,
     count: reviews.length,
@@ -30,24 +31,29 @@ exports.getProductReviews = asyncHandler(async (req, res, next) => {
   });
 });
 
-// @desc    Get a single review
-// @route   GET /api/v1/reviews/:id
+// @desc    Get single review
+// @route   GET /api/products/:productId/reviews/:id
 // @access  Public
 exports.getReview = asyncHandler(async (req, res, next) => {
   const review = await Review.findById(req.params.id)
     .populate({
       path: 'product',
-      select: 'name description'
+      select: 'name description price mainImage'
     })
     .populate({
       path: 'user',
       select: 'name avatar'
     });
-
+  
   if (!review) {
-    return next(new ErrorResponse(`No review found with id ${req.params.id}`, 404));
+    return next(new ErrorResponse(`No review found with id of ${req.params.id}`, 404));
   }
-
+  
+  // Check if review belongs to the specified product
+  if (review.product._id.toString() !== req.params.productId) {
+    return next(new ErrorResponse(`Review does not belong to product with id of ${req.params.productId}`, 400));
+  }
+  
   res.status(200).json({
     success: true,
     data: review
@@ -55,30 +61,39 @@ exports.getReview = asyncHandler(async (req, res, next) => {
 });
 
 // @desc    Add review
-// @route   POST /api/v1/products/:productId/reviews
+// @route   POST /api/products/:productId/reviews
 // @access  Private
 exports.addReview = asyncHandler(async (req, res, next) => {
-  req.body.product = req.params.productId;
+  // Add user and product to req.body
   req.body.user = req.user.id;
+  req.body.product = req.params.productId;
   
-  // Check if product exists
+  // Validate product exists
   const product = await Product.findById(req.params.productId);
   if (!product) {
-    return next(new ErrorResponse(`No product found with id ${req.params.productId}`, 404));
+    return next(new ErrorResponse(`No product found with id of ${req.params.productId}`, 404));
   }
-
+  
   // Check if user already reviewed this product
   const existingReview = await Review.findOne({
-    product: req.params.productId,
-    user: req.user.id
+    user: req.user.id,
+    product: req.params.productId
   });
-
+  
   if (existingReview) {
-    return next(new ErrorResponse(`You have already reviewed this product`, 400));
+    return next(new ErrorResponse(`User already reviewed this product`, 400));
   }
-
+  
+  // Validate rating is between 1-5
+  if (req.body.rating < 1 || req.body.rating > 5) {
+    return next(new ErrorResponse(`Rating must be between 1 and 5`, 400));
+  }
+  
   const review = await Review.create(req.body);
-
+  
+  // Update product average rating
+  await updateProductRating(req.params.productId);
+  
   res.status(201).json({
     success: true,
     data: review
@@ -86,28 +101,39 @@ exports.addReview = asyncHandler(async (req, res, next) => {
 });
 
 // @desc    Update review
-// @route   PUT /api/v1/reviews/:id
+// @route   PUT /api/products/:productId/reviews/:id
 // @access  Private
 exports.updateReview = asyncHandler(async (req, res, next) => {
   let review = await Review.findById(req.params.id);
-
+  
   if (!review) {
-    return next(new ErrorResponse(`No review found with id ${req.params.id}`, 404));
+    return next(new ErrorResponse(`No review found with id of ${req.params.id}`, 404));
   }
-
-  // Make sure review belongs to user or user is admin
+  
+  // Check if review belongs to user or user is admin
   if (review.user.toString() !== req.user.id && req.user.role !== 'admin') {
     return next(new ErrorResponse(`Not authorized to update this review`, 401));
   }
-
-  // Update timestamp
-  req.body.updatedAt = Date.now();
-
+  
+  // Check if review belongs to the specified product
+  if (review.product.toString() !== req.params.productId) {
+    return next(new ErrorResponse(`Review does not belong to product with id of ${req.params.productId}`, 400));
+  }
+  
+  // Validate rating is between 1-5 if provided
+  if (req.body.rating && (req.body.rating < 1 || req.body.rating > 5)) {
+    return next(new ErrorResponse(`Rating must be between 1 and 5`, 400));
+  }
+  
+  // Update review
   review = await Review.findByIdAndUpdate(req.params.id, req.body, {
     new: true,
     runValidators: true
   });
-
+  
+  // Update product average rating
+  await updateProductRating(req.params.productId);
+  
   res.status(200).json({
     success: true,
     data: review
@@ -115,43 +141,74 @@ exports.updateReview = asyncHandler(async (req, res, next) => {
 });
 
 // @desc    Delete review
-// @route   DELETE /api/v1/reviews/:id
+// @route   DELETE /api/products/:productId/reviews/:id
 // @access  Private
 exports.deleteReview = asyncHandler(async (req, res, next) => {
   const review = await Review.findById(req.params.id);
-
+  
   if (!review) {
-    return next(new ErrorResponse(`No review found with id ${req.params.id}`, 404));
+    return next(new ErrorResponse(`No review found with id of ${req.params.id}`, 404));
   }
-
-  // Make sure review belongs to user or user is admin
+  
+  // Check if review belongs to user or user is admin
   if (review.user.toString() !== req.user.id && req.user.role !== 'admin') {
     return next(new ErrorResponse(`Not authorized to delete this review`, 401));
   }
-
-  await review.remove();
-
+  
+  // Check if review belongs to the specified product
+  if (review.product.toString() !== req.params.productId) {
+    return next(new ErrorResponse(`Review does not belong to product with id of ${req.params.productId}`, 400));
+  }
+  
+  await review.deleteOne();
+  
+  // Update product average rating
+  await updateProductRating(req.params.productId);
+  
   res.status(200).json({
     success: true,
     data: {}
   });
 });
 
-// @desc    Verify a review (admin only)
-// @route   PUT /api/v1/reviews/:id/verify
-// @access  Private (Admin)
+// @desc    Verify review (admin only)
+// @route   PUT /api/products/:productId/reviews/:id/verify
+// @access  Private/Admin
 exports.verifyReview = asyncHandler(async (req, res, next) => {
-  const review = await Review.findById(req.params.id);
-
+  let review = await Review.findById(req.params.id);
+  
   if (!review) {
-    return next(new ErrorResponse(`No review found with id ${req.params.id}`, 404));
+    return next(new ErrorResponse(`No review found with id of ${req.params.id}`, 404));
   }
-
+  
+  // Check if review belongs to the specified product
+  if (review.product.toString() !== req.params.productId) {
+    return next(new ErrorResponse(`Review does not belong to product with id of ${req.params.productId}`, 400));
+  }
+  
+  // Update review verification status
   review.verified = true;
+  review.verifiedAt = Date.now();
+  
   await review.save();
-
+  
   res.status(200).json({
     success: true,
     data: review
   });
 });
+
+// Helper function to update product average rating
+async function updateProductRating(productId) {
+  const reviews = await Review.find({ product: productId });
+  
+  // Calculate average rating
+  const totalRating = reviews.reduce((acc, review) => acc + review.rating, 0);
+  const averageRating = reviews.length > 0 ? totalRating / reviews.length : 0;
+  
+  // Update product with average rating and review count
+  await Product.findByIdAndUpdate(productId, {
+    rating: averageRating,
+    reviewCount: reviews.length
+  });
+}

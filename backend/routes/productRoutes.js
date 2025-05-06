@@ -23,6 +23,7 @@ const {
   deleteVariant,
   updateSpecifications
 } = require('../controllers/productController');
+const reviewRouter = require('./reviewRoutes');
 
 // Special routes
 router.get('/featured', getFeaturedProducts);
@@ -65,5 +66,8 @@ router.route('/:id')
   .get(getProduct)
   .put(protect, authorize('admin'), updateProduct)
   .delete(protect, authorize('admin'), deleteProduct);
+
+// Nested review routes
+router.use('/:productId/reviews', reviewRouter);
 
 module.exports = router;

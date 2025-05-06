@@ -106,12 +106,7 @@ app.use('/api/categories', require('./routes/categoryRoutes'));
 app.use('/api/cart', require('./routes/cartRoutes'));
 app.use('/api/coupons', require('./routes/couponRoutes'));
 app.use('/api/orders', require('./routes/orderRoutes'));
-
-// Routes (commented out until implemented)
-// Once you implement these routes, uncomment them
-/*
-app.use('/api/reviews', require('./routes/reviews'));
-*/
+app.use('/api/v1/reviews', require('./routes/reviewRoutes'));
 
 // Error handler middleware (must be last)
 app.use(errorHandler);

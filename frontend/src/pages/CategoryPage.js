@@ -59,12 +59,22 @@ const CategoryPage = () => {
         setLoading(true);
         setError(null);
         
-        // Get category details
-        const categoryResponse = await categoryService.getCategory(id);
+        // Check if the ID is a slug or regular ID (slugs generally don't have hyphens or aren't 24 chars)
+        const isSlug = isNaN(id) && (id.includes('-') || id.length !== 24);
+        
+        // Get category details using appropriate method
+        let categoryResponse;
+        if (isSlug) {
+          categoryResponse = await categoryService.getCategoryBySlug(id);
+        } else {
+          categoryResponse = await categoryService.getCategory(id);
+        }
+        
         setCategory(categoryResponse.data);
+        const categoryId = categoryResponse.data._id;
         
         // Get subcategories
-        const subcategoriesResponse = await categoryService.getSubcategories(id);
+        const subcategoriesResponse = await categoryService.getSubcategories(categoryId);
         setSubcategories(subcategoriesResponse.data);
         
         // Get category products
@@ -86,7 +96,7 @@ const CategoryPage = () => {
           params.price_max = currentPriceMax;
         }
         
-        const productsResponse = await categoryService.getCategoryProducts(id, params);
+        const productsResponse = await categoryService.getCategoryProducts(categoryId, params);
         setProducts(productsResponse.data);
         setPagination(productsResponse.pagination || {
           page: currentPage,
@@ -208,7 +218,7 @@ const CategoryPage = () => {
           {subcategories.map(subcat => (
             <Link 
               key={subcat._id} 
-              to={`/category/${subcat._id}`}
+              to={`/category/${subcat.slug || subcat._id}`}
               className="bg-white p-4 rounded-lg shadow-sm hover:shadow-md transition text-center flex flex-col items-center"
             >
               {subcat.imageUrl ? (

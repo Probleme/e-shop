@@ -9,7 +9,6 @@ import {
   X, 
   Search,
   Heart,
-  ChevronDown,
   Home,
   Package,
   HelpCircle,
@@ -17,6 +16,7 @@ import {
 } from 'lucide-react';
 import useAuth from '../../hooks/useAuth';
 import useOnClickOutside from '../../hooks/useOnClickOutside';
+import CategoryNav from '../categories/CategoryNav';
 
 const Navbar = () => {
   const { user, isAuthenticated, isAdmin, logout } = useAuth();
@@ -24,14 +24,11 @@ const Navbar = () => {
   const [mobileMenuOpen, setMobileMenuOpen] = useState(false);
   const [searchQuery, setSearchQuery] = useState('');
   const [userDropdownOpen, setUserDropdownOpen] = useState(false);
-  const [categoriesOpen, setCategoriesOpen] = useState(false);
   
   const userMenuRef = useRef(null);
-  const categoriesMenuRef = useRef(null);
   
   // Close dropdowns when clicking outside
   useOnClickOutside(userMenuRef, () => setUserDropdownOpen(false));
-  useOnClickOutside(categoriesMenuRef, () => setCategoriesOpen(false));
 
   // Close mobile menu on screen resize
   useEffect(() => {
@@ -59,15 +56,6 @@ const Navbar = () => {
     setUserDropdownOpen(false);
     navigate('/login');
   };
-
-  const categories = [
-    { name: "Electronics", path: "/category/electronics" },
-    { name: "Clothing", path: "/category/clothing" },
-    { name: "Home & Garden", path: "/category/home-garden" },
-    { name: "Books", path: "/category/books" },
-    { name: "Sports", path: "/category/sports" },
-    { name: "Toys", path: "/category/toys" },
-  ];
   
   return (
     <header className="bg-white shadow-md sticky top-0 z-50">
@@ -100,32 +88,6 @@ const Navbar = () => {
               <ShoppingBag className="h-8 w-8 text-primary-600" />
               <span className="ml-2 text-xl font-bold text-gray-800">E-Shop</span>
             </Link>
-            
-            {/* Categories dropdown - desktop */}
-            <div className="hidden md:ml-6 md:flex relative" ref={categoriesMenuRef}>
-              <button 
-                onClick={() => setCategoriesOpen(!categoriesOpen)}
-                className="flex items-center text-gray-700 hover:text-primary-600 px-3 py-2"
-              >
-                Categories <ChevronDown className="ml-1 h-4 w-4" />
-              </button>
-              
-              {/* Categories dropdown menu */}
-              {categoriesOpen && (
-                <div className="absolute top-full left-0 mt-1 bg-white shadow-lg rounded-md w-56 py-2 z-30">
-                  {categories.map((category) => (
-                    <Link
-                      key={category.path}
-                      to={category.path}
-                      className="block px-4 py-2 text-gray-700 hover:bg-gray-100"
-                      onClick={() => setCategoriesOpen(false)}
-                    >
-                      {category.name}
-                    </Link>
-                  ))}
-                </div>
-              )}
-            </div>
           </div>
           
           {/* Search bar - desktop */}
@@ -156,7 +118,7 @@ const Navbar = () => {
               <Link to="/" className="text-gray-600 hover:text-primary-600 px-1">
                 Home
               </Link>
-              <Link to="/shop" className="text-gray-600 hover:text-primary-600 px-1">
+              <Link to="/products" className="text-gray-600 hover:text-primary-600 px-1">
                 Shop
               </Link>
               <Link to="/deals" className="text-gray-600 hover:text-primary-600 px-1">
@@ -268,6 +230,11 @@ const Navbar = () => {
         </div>
       </div>
 
+      {/* Category navigation - Desktop */}
+      <div className="hidden md:block">
+        <CategoryNav />
+      </div>
+
       {/* Mobile menu */}
       {mobileMenuOpen && (
         <div className="md:hidden bg-white border-t border-gray-200">
@@ -293,19 +260,11 @@ const Navbar = () => {
           </div>
           
           {/* Categories - mobile */}
-          <div className="border-b border-gray-200">
-            <div className="px-4 py-3 text-gray-800 font-medium">Categories</div>
-            <div className="grid grid-cols-2 gap-2 px-4 py-2">
-              {categories.map((category) => (
-                <Link
-                  key={category.path}
-                  to={category.path}
-                  className="py-2 px-3 rounded-md bg-gray-50 hover:bg-gray-100 text-sm"
-                  onClick={() => setMobileMenuOpen(false)}
-                >
-                  {category.name}
-                </Link>
-              ))}
+          <div className="border-b border-gray-200 px-4 pt-3">
+            <div className="text-gray-800 font-medium mb-2">Categories</div>
+            {/* Include CategoryNav in mobile menu but with special styling */}
+            <div className="pb-3">
+              <CategoryNav isMobile={true} onCategoryClick={() => setMobileMenuOpen(false)} />
             </div>
           </div>
           
@@ -321,7 +280,7 @@ const Navbar = () => {
             </Link>
             
             <Link
-              to="/shop"
+              to="/products"
               className="flex items-center px-4 py-2 text-gray-700 hover:bg-gray-50"
               onClick={() => setMobileMenuOpen(false)}
             >

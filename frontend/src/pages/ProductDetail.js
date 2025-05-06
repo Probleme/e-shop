@@ -20,6 +20,7 @@ import {
   RefreshCw,
   AlertTriangle
 } from 'lucide-react';
+import ReviewForm from '../components/reviews/ReviewForm';
 
 // Product Image Gallery Component
 const ProductGallery = ({ mainImage, images = [] }) => {
@@ -635,44 +636,70 @@ const ProductDetail = () => {
             
             {/* Reviews Tab */}
             {activeTab === 'reviews' && (
-              <div>
-                {product.reviews && product.reviews.length > 0 ? (
-                  <div className="space-y-6">
-                    {product.reviews.map((review, idx) => (
-                      <div key={idx} className="border-b border-gray-200 pb-6 last:border-b-0">
-                        <div className="flex items-center mb-2">
-                          <div className="flex">
-                            {[...Array(5)].map((_, i) => (
-                              <Star 
-                                key={i} 
-                                size={16} 
-                                className={`${
-                                  i < review.rating 
-                                    ? 'text-yellow-400 fill-yellow-400' 
-                                    : 'text-gray-300'
-                                }`} 
-                              />
-                            ))}
+              <div className="space-y-8">
+                {/* Existing Reviews */}
+                <div>
+                  <h3 className="text-lg font-semibold mb-4">Customer Reviews</h3>
+                  {product.reviews && product.reviews.length > 0 ? (
+                    <div className="space-y-6">
+                      {product.reviews.map((review, idx) => (
+                        <div key={idx} className="border-b border-gray-200 pb-6 last:border-b-0">
+                          <div className="flex items-center mb-2">
+                            <div className="flex">
+                              {[...Array(5)].map((_, i) => (
+                                <Star 
+                                  key={i} 
+                                  size={16} 
+                                  className={`${
+                                    i < review.rating 
+                                      ? 'text-yellow-400 fill-yellow-400' 
+                                      : 'text-gray-300'
+                                  }`} 
+                                />
+                              ))}
+                            </div>
+                            <span className="ml-2 text-sm font-medium text-gray-900">
+                              {review.user?.name || 'Customer'}
+                            </span>
+                            <span className="ml-2 text-xs text-gray-500">
+                              {new Date(review.createdAt).toLocaleDateString()}
+                            </span>
                           </div>
-                          <span className="ml-2 text-sm font-medium text-gray-900">
-                            {review.user?.name || 'Customer'}
-                          </span>
-                          <span className="ml-2 text-xs text-gray-500">
-                            {new Date(review.createdAt).toLocaleDateString()}
-                          </span>
+                          <p className="text-gray-700">{review.text || review.comment}</p>
                         </div>
-                        <p className="text-gray-700">{review.text || review.comment}</p>
-                      </div>
-                    ))}
-                  </div>
-                ) : (
-                  <div className="text-center py-8">
-                    <p className="text-gray-500">No reviews yet</p>
-                    <button className="mt-4 px-4 py-2 bg-primary-600 text-white rounded hover:bg-primary-700 transition">
-                      Write a Review
-                    </button>
-                  </div>
-                )}
+                      ))}
+                    </div>
+                  ) : (
+                    <div className="text-center py-4 bg-gray-50 rounded-lg">
+                      <p className="text-gray-500">No reviews yet. Be the first to review this product!</p>
+                    </div>
+                  )}
+                </div>
+
+                {/* Review Form */}
+                <div className="mt-8 pt-8 border-t border-gray-200">
+                  <h3 className="text-lg font-semibold mb-4">Write a Review</h3>
+                  <ReviewForm 
+                    productId={product._id} 
+                    onReviewSubmitted={() => {
+                      // Refresh product data to show the new review
+                      const fetchProduct = async () => {
+                        try {
+                          setLoading(true);
+                          const response = await productService.getProduct(id);
+                          setProduct(response.data);
+                        } catch (err) {
+                          console.error('Error refreshing product data:', err);
+                        } finally {
+                          setLoading(false);
+                        }
+                      };
+                      
+                      fetchProduct();
+                      toast.success('Your review has been submitted!');
+                    }} 
+                  />
+                </div>
               </div>
             )}
           </div>

@@ -11,15 +11,16 @@ import {
   Star, 
   Grid, 
   List,
-  Heart,
-  Loader,
   RefreshCw,
-  ChevronRight
+  ChevronRight,
+  AlertTriangle
 } from 'lucide-react';
 import { toast } from 'react-toastify';
+import CategoryNav from '../components/categories/CategoryNav'; // Import the CategoryNav component
 
-// Product Card Component
+// Product Card Component (unchanged)
 const ProductCard = ({ product, listView = false }) => {
+  /* Keeping this unchanged as it's already well implemented */
   const { addToCart } = useCart();
   
   const handleAddToCart = async (e) => {
@@ -195,7 +196,8 @@ const FilterAccordion = ({ title, children, initiallyOpen = false }) => {
 
 const ProductsPage = () => {
   const [products, setProducts] = useState([]);
-  const [categories, setCategories] = useState([]);
+  const [categoryDetails, setCategoryDetails] = useState(null);
+  const [categoryPath, setCategoryPath] = useState([]);
   const [loading, setLoading] = useState(true);
   const [error, setError] = useState(null);
   const [listView, setListView] = useState(false);
@@ -214,6 +216,60 @@ const ProductsPage = () => {
   const currentPage = parseInt(searchParams.get('page') || '1');
   const currentPriceMin = searchParams.get('price_min');
   const currentPriceMax = searchParams.get('price_max');
+  
+  // Fetch category details and build breadcrumb path
+  useEffect(() => {
+    const fetchCategoryDetails = async () => {
+      if (!currentCategory) {
+        setCategoryDetails(null);
+        setCategoryPath([]);
+        return;
+      }
+      
+      try {
+        // Check if it's a slug or ID
+        const isSlug = currentCategory.includes('-');
+        
+        let response;
+        if (isSlug) {
+          response = await categoryService.getCategoryBySlug(currentCategory);
+        } else {
+          response = await categoryService.getCategory(currentCategory);
+        }
+        
+        setCategoryDetails(response.data);
+        
+        // Build category path for breadcrumbs
+        const buildCategoryPath = async (category) => {
+          let path = [category];
+          let currentCat = category;
+          
+          while (currentCat.parent) {
+            try {
+              const parentResponse = await categoryService.getCategory(currentCat.parent);
+              const parentCategory = parentResponse.data;
+              path.unshift(parentCategory);
+              currentCat = parentCategory;
+            } catch (err) {
+              console.error('Error fetching parent category:', err);
+              break;
+            }
+          }
+          
+          setCategoryPath(path);
+        };
+        
+        buildCategoryPath(response.data);
+        
+      } catch (err) {
+        console.error('Failed to fetch category details:', err);
+        setCategoryDetails(null);
+        setCategoryPath([]);
+      }
+    };
+    
+    fetchCategoryDetails();
+  }, [currentCategory]);
   
   // Fetch products with current filters
   useEffect(() => {
@@ -262,21 +318,7 @@ const ProductsPage = () => {
     };
     
     fetchProducts();
-  }, [currentCategory, currentSearch, currentSort, currentPage, currentPriceMin, currentPriceMax]);
-  
-  // Fetch categories
-  useEffect(() => {
-    const fetchCategories = async () => {
-      try {
-        const response = await categoryService.getCategories();
-        setCategories(response.data);
-      } catch (err) {
-        console.error('Failed to fetch categories:', err);
-      }
-    };
-    
-    fetchCategories();
-  }, []);
+  }, [currentCategory, currentSearch, currentSort, currentPage, currentPriceMin, currentPriceMax, pagination.limit]);
   
   // Apply filters
   const applyFilter = (key, value) => {
@@ -294,6 +336,12 @@ const ProductsPage = () => {
     
     setSearchParams(newParams);
   };
+  
+  // Handle category change from CategoryNav
+  // const handleCategoryChange = (category) => {
+  //   // Use slug if available, otherwise use ID
+  //   applyFilter('category', category.slug || category._id);
+  // };
   
   // Handle price filter
   const handlePriceFilter = (e) => {
@@ -329,69 +377,77 @@ const ProductsPage = () => {
     <div className="container mx-auto px-4 py-8">
       {/* Page header */}
       <div className="mb-8">
-        <h1 className="text-2xl md:text-3xl font-bold text-gray-900">All Products</h1>
+        <h1 className="text-2xl md:text-3xl font-bold text-gray-900">
+          {categoryDetails ? categoryDetails.name : 'All Products'}
+        </h1>
+        
+        {/* Breadcrumb */}
         <div className="flex flex-wrap items-center gap-2 mt-2">
           <Link to="/" className="text-sm text-gray-600 hover:text-primary-600">Home</Link>
           <ChevronRight size={14} className="text-gray-400" />
-          <span className="text-sm text-gray-800">Products</span>
-          {currentCategory && (
-            <>
+          
+          <Link to="/products" className="text-sm text-gray-600 hover:text-primary-600">Products</Link>
+          
+          {/* Show category path in breadcrumbs */}
+          {categoryPath.map((category, index) => (
+            <React.Fragment key={category._id}>
               <ChevronRight size={14} className="text-gray-400" />
-              <span className="text-sm text-gray-800">
-                {categories.find(c => c._id === currentCategory)?.name || 'Category'}
-              </span>
-            </>
-          )}
+              {index === categoryPath.length - 1 ? (
+                <span className="text-sm text-gray-800">{category.name}</span>
+              ) : (
+                <Link 
+                  to={`/products?category=${category.slug || category._id}`} 
+                  className="text-sm text-gray-600 hover:text-primary-600"
+                >
+                  {category.name}
+                </Link>
+              )}
+            </React.Fragment>
+          ))}
         </div>
+        
+        {/* Category description if available */}
+        {categoryDetails?.description && (
+          <p className="mt-4 text-gray-600">{categoryDetails.description}</p>
+        )}
       </div>
       
       <div className="flex flex-col lg:flex-row gap-8">
         {/* Filters sidebar */}
-        <div className="lg:w-1/4">
+        <div className="lg:w-1/4 space-y-6">
+          {/* Category Navigation */}
+          <div className="bg-white rounded-lg shadow overflow-hidden">
+            <div className="px-4 py-3 bg-gray-50 border-b border-gray-200">
+              <h2 className="font-medium text-gray-800">Categories</h2>
+            </div>
+            <div className="p-4">
+              <CategoryNav isSidebar={true} />
+            </div>
+          </div>
+          
+          {/* Filters */}
           <div className="bg-white rounded-lg shadow p-4 lg:p-6">
             <div className="flex items-center justify-between mb-4">
               <h2 className="text-lg font-semibold flex items-center">
                 <Filter size={18} className="mr-2" />
                 Filters
               </h2>
-              {(currentCategory || currentPriceMin || currentPriceMax) && (
+              {(currentPriceMin || currentPriceMax) && (
                 <button 
-                  onClick={clearAllFilters}
+                  onClick={() => {
+                    // Clear price filters but keep category
+                    const newParams = new URLSearchParams(searchParams);
+                    newParams.delete('price_min');
+                    newParams.delete('price_max');
+                    newParams.set('page', '1');
+                    setSearchParams(newParams);
+                  }}
                   className="text-sm text-primary-600 hover:text-primary-800"
                 >
-                  Clear All
+                  Clear Filters
                 </button>
               )}
             </div>
-            
-            {/* Category filter */}
-            <FilterAccordion title="Categories" initiallyOpen={true}>
-              <div className="space-y-2">
-                {categories.map((category) => (
-                  <div key={category._id} className="flex items-center">
-                    <input
-                      type="radio"
-                      id={`cat-${category._id}`}
-                      name="category"
-                      checked={currentCategory === category._id}
-                      onChange={() => applyFilter('category', category._id)}
-                      className="h-4 w-4 text-primary-600 focus:ring-primary-500"
-                    />
-                    <label htmlFor={`cat-${category._id}`} className="ml-2 text-sm text-gray-700">
-                      {category.name}
-                    </label>
-                  </div>
-                ))}
-                {currentCategory && (
-                  <button 
-                    onClick={() => applyFilter('category', null)}
-                    className="text-xs text-primary-600 hover:text-primary-800"
-                  >
-                    Show All Categories
-                  </button>
-                )}
-              </div>
-            </FilterAccordion>
             
             {/* Price range filter */}
             <FilterAccordion title="Price Range" initiallyOpen={true}>
@@ -436,6 +492,8 @@ const ProductsPage = () => {
                 </button>
               </form>
             </FilterAccordion>
+            
+            {/* Additional filters can be added here */}
           </div>
         </div>
         
@@ -487,7 +545,8 @@ const ProductsPage = () => {
               <RefreshCw size={32} className="animate-spin text-primary-600" />
             </div>
           ) : error ? (
-            <div className="bg-red-50 border border-red-200 text-red-700 rounded-lg p-4 text-center">
+            <div className="bg-red-50 border border-red-200 text-red-700 rounded-lg p-4 text-center flex flex-col items-center">
+              <AlertTriangle size={24} className="mb-2" />
               {error}
               <button
                 onClick={() => window.location.reload()}

@@ -20,8 +20,9 @@ import {
   PlusCircle
 } from 'lucide-react';
 import { toast } from 'react-toastify';
+import FeaturedCategories from '../components/categories/FeaturedCategories';
 
-// Component for product card
+// Product Card Component
 const ProductCard = ({ product }) => {
   const addToCart = async (productId) => {
     try {
@@ -47,10 +48,10 @@ const ProductCard = ({ product }) => {
   return (
     <div className="bg-white rounded-lg overflow-hidden shadow-sm hover:shadow-md transition group">
       <div className="relative">
-        <Link to={`/product/${product._id}`}>
+        <Link to={`/product/${product.slug || product._id}`}>
           <div className="h-64 overflow-hidden">
             <img 
-              src={product.imageUrl || '/placeholder-product.jpg'} 
+              src={product.imageUrl || product.mainImage || '/placeholder-product.jpg'} 
               alt={product.name} 
               className="w-full h-full object-cover group-hover:scale-105 transition duration-300"
             />
@@ -73,7 +74,7 @@ const ProductCard = ({ product }) => {
       
       <div className="p-4">
         <span className="text-xs text-gray-500">{product.category?.name}</span>
-        <Link to={`/product/${product._id}`}>
+        <Link to={`/product/${product.slug || product._id}`}>
           <h3 className="font-medium text-gray-800 hover:text-primary-600 transition mt-1 line-clamp-2">
             {product.name}
           </h3>
@@ -81,7 +82,16 @@ const ProductCard = ({ product }) => {
         
         <div className="flex items-center mt-1">
           <div className="flex items-center">
-            <Star className="h-4 w-4 fill-current text-amber-400" />
+            {[...Array(5)].map((_, i) => (
+              <Star 
+                key={i} 
+                className={`h-4 w-4 ${
+                  i < Math.floor(product.rating || 0) 
+                    ? 'text-yellow-400 fill-current text-yellow-400' 
+                    : 'text-gray-300'
+                }`} 
+              />
+            ))}
             <span className="ml-1 text-sm text-gray-600">
               {product.rating || 0}
             </span>
@@ -120,17 +130,17 @@ const Testimonial = ({ testimonial }) => (
         />
       ))}
     </div>
-    <p className="text-gray-600 mt-3">{testimonial.content}</p>
+    <p className="text-gray-600 mt-3">{testimonial.content || testimonial.text}</p>
     <div className="flex items-center mt-6">
       <div className="h-10 w-10 rounded-full bg-gray-200 overflow-hidden">
         <img 
           src={testimonial.user?.avatar || '/placeholder-avatar.jpg'} 
-          alt={testimonial.user?.name} 
+          alt={testimonial.user?.name || testimonial.name} 
           className="h-full w-full object-cover" 
         />
       </div>
       <div className="ml-3">
-        <h4 className="font-medium text-gray-900">{testimonial.user?.name}</h4>
+        <h4 className="font-medium text-gray-900">{testimonial.user?.name || testimonial.name}</h4>
         <p className="text-sm text-gray-500">Verified Customer</p>
       </div>
     </div>
@@ -148,7 +158,7 @@ const AdminQuickActions = () => {
       
       <div className="grid grid-cols-2 md:grid-cols-4 gap-4">
         <Link
-          to="/admin/dashboard"
+          to="/dashboard"
           className="flex flex-col items-center p-4 bg-blue-50 rounded-lg hover:bg-blue-100 transition"
         >
           <BarChart2 className="h-8 w-8 text-blue-600 mb-2" />
@@ -164,19 +174,19 @@ const AdminQuickActions = () => {
         </Link>
         
         <Link
-          to="/admin/products/new"
+          to="/admin/categories"
           className="flex flex-col items-center p-4 bg-purple-50 rounded-lg hover:bg-purple-100 transition"
         >
           <PlusCircle className="h-8 w-8 text-purple-600 mb-2" />
-          <span className="text-sm font-medium text-gray-800">New Product</span>
+          <span className="text-sm font-medium text-gray-800">Categories</span>
         </Link>
         
         <Link
-          to="/admin/settings"
+          to="/admin/reviews"
           className="flex flex-col items-center p-4 bg-amber-50 rounded-lg hover:bg-amber-100 transition"
         >
-          <Settings className="h-8 w-8 text-amber-600 mb-2" />
-          <span className="text-sm font-medium text-gray-800">Settings</span>
+          <Star className="h-8 w-8 text-amber-600 mb-2" />
+          <span className="text-sm font-medium text-gray-800">Reviews</span>
         </Link>
       </div>
     </div>
@@ -194,13 +204,11 @@ const HomePage = () => {
   const [featuredProducts, setFeaturedProducts] = useState([]);
   const [newArrivals, setNewArrivals] = useState([]);
   const [bestSellers, setBestSellers] = useState([]);
-  const [categories, setCategories] = useState([]);
   const [testimonials, setTestimonials] = useState([]);
   const [banners, setBanners] = useState([]);
   const [dealOfTheDay, setDealOfTheDay] = useState(null);
   const [loading, setLoading] = useState({
     products: true,
-    categories: true,
     testimonials: true,
     banners: true,
     dealOfTheDay: true
@@ -210,44 +218,119 @@ const HomePage = () => {
   useEffect(() => {
     const fetchHomePageData = async () => {
       try {
-        // Fetch featured products
-        const featuredResponse = await api.get('/products/featured');
-        setFeaturedProducts(featuredResponse.data.data);
-        setLoading(prev => ({ ...prev, products: false }));
+        // Use Promise.allSettled to handle multiple API calls
+        const [
+          featuredProductsRes,
+          newArrivalsRes,
+          bestSellersRes,
+          testimonialsRes,
+          bannersRes,
+          dealOfTheDayRes
+        ] = await Promise.allSettled([
+          // Featured Products
+          api.get('/products/featured').catch(() => ({ 
+            status: 'fulfilled', 
+            value: { data: { data: [] } } 
+          })),
+          
+          // New Arrivals
+          api.get('/products/new-arrivals').catch(() => ({ 
+            status: 'fulfilled', 
+            value: { data: { data: [] } } 
+          })),
+          
+          // Best Sellers
+          api.get('/products/best-sellers').catch(() => ({ 
+            status: 'fulfilled', 
+            value: { data: { data: [] } } 
+          })),
+          
+          // Testimonials - with fallback
+          fetch('/api/testimonials')
+            .then(res => {
+              if (!res.ok) throw new Error('Testimonials not available');
+              return res.json();
+            })
+            .catch(err => {
+              console.log('Testimonials endpoint not available, using fallback data');
+              return {
+                success: true,
+                data: [
+                  {
+                    _id: '1',
+                    name: 'John Doe',
+                    role: 'Verified Customer',
+                    image: 'https://randomuser.me/api/portraits/men/1.jpg',
+                    text: 'Amazing products and fast shipping! Will definitely order again.',
+                    rating: 5
+                  },
+                  {
+                    _id: '2',
+                    name: 'Jane Smith',
+                    role: 'Verified Customer',
+                    image: 'https://randomuser.me/api/portraits/women/2.jpg',
+                    text: 'Great customer service and quality products. Highly recommend!',
+                    rating: 5
+                  },
+                  {
+                    _id: '3',
+                    name: 'Mike Johnson',
+                    role: 'Verified Customer',
+                    image: 'https://randomuser.me/api/portraits/men/3.jpg',
+                    text: 'Fast delivery and the product exceeded my expectations!',
+                    rating: 4
+                  }
+                ]
+              };
+            }),
+          
+          // Banners - with fallback
+          api.get('/banners').catch(() => ({ 
+            status: 'fulfilled',
+            value: { 
+              data: { 
+                data: fallbackBanners
+              } 
+            } 
+          })),
+          
+          // Deal of the Day
+          api.get('/products/deal-of-the-day').catch(() => ({
+            status: 'fulfilled',
+            value: { data: { data: null } } 
+          }))
+        ]);
         
-        // Fetch new arrivals
-        const newArrivalsResponse = await api.get('/products/new-arrivals');
-        setNewArrivals(newArrivalsResponse.data.data);
+        // Process results
+        if (featuredProductsRes.status === 'fulfilled') {
+          setFeaturedProducts(featuredProductsRes.value.data.data || []);
+        }
         
-        // Fetch best sellers
-        const bestSellersResponse = await api.get('/products/best-sellers');
-        setBestSellers(bestSellersResponse.data.data);
+        if (newArrivalsRes.status === 'fulfilled') {
+          setNewArrivals(newArrivalsRes.value.data.data || []);
+        }
         
-        // Fetch categories
-        const categoriesResponse = await api.get('/categories');
-        setCategories(categoriesResponse.data.data);
-        setLoading(prev => ({ ...prev, categories: false }));
+        if (bestSellersRes.status === 'fulfilled') {
+          setBestSellers(bestSellersRes.value.data.data || []);
+        }
         
-        // Fetch testimonials
-        const testimonialsResponse = await api.get('/testimonials');
-        setTestimonials(testimonialsResponse.data.data);
-        setLoading(prev => ({ ...prev, testimonials: false }));
+        if (testimonialsRes.status === 'fulfilled') {
+          setTestimonials(testimonialsRes.value.data || []);
+        }
         
-        // Fetch banners/carousel slides
-        const bannersResponse = await api.get('/banners');
-        setBanners(bannersResponse.data.data);
-        setLoading(prev => ({ ...prev, banners: false }));
+        if (bannersRes.status === 'fulfilled') {
+          setBanners(bannersRes.value.data.data || []);
+        }
         
-        // Fetch deal of the day
-        const dealResponse = await api.get('/products/deal-of-the-day');
-        setDealOfTheDay(dealResponse.data.data);
-        setLoading(prev => ({ ...prev, dealOfTheDay: false }));
+        if (dealOfTheDayRes.status === 'fulfilled' && dealOfTheDayRes.value.data.data) {
+          setDealOfTheDay(dealOfTheDayRes.value.data.data);
+        }
+        
       } catch (error) {
         console.error('Error fetching homepage data:', error);
-        // Set loading to false even on error to show fallback UI
+      } finally {
         setLoading({
           products: false,
-          categories: false,
           testimonials: false,
           banners: false,
           dealOfTheDay: false
@@ -318,16 +401,6 @@ const HomePage = () => {
     return () => clearInterval(interval);
   }, [nextSlide, banners.length]);
 
-  // Fallback categories if API fails
-  const fallbackCategories = [
-    { name: "Electronics", icon: "💻" },
-    { name: "Clothing", icon: "👕" },
-    { name: "Home & Garden", icon: "🏡" },
-    { name: "Books", icon: "📚" },
-    { name: "Sports", icon: "🏀" },
-    { name: "Toys", icon: "🧸" }
-  ];
-  
   // Fallback banner/carousel content if API fails
   const fallbackBanners = [
     {
@@ -336,7 +409,7 @@ const HomePage = () => {
       subtitle: "NEW ARRIVALS",
       description: "Up to 40% off on summer essentials",
       buttonText: "Shop Now",
-      buttonLink: "/collections/summer",
+      buttonLink: "/products",
       imageUrl: "https://images.unsplash.com/photo-1577660002965-04865592fc60?ixlib=rb-4.0.3&ixid=MnwxMjA3fDB8MHxzZWFyY2h8NXx8ZmFzaGlvbiUyMGNsb3RoZXN8ZW58MHx8MHx8&auto=format&fit=crop&w=1200&q=80",
       colorScheme: "bg-blue-50 text-blue-900"
     }
@@ -425,42 +498,8 @@ const HomePage = () => {
         </div>
       </section>
       
-      {/* Featured Categories Section */}
-      <section className="py-16">
-        <div className="container mx-auto px-4">
-          <div className="text-center mb-10">
-            <h2 className="text-3xl font-bold text-gray-900">Shop by Category</h2>
-            <p className="mt-2 text-gray-600 max-w-2xl mx-auto">
-              Explore our wide range of products across popular categories
-            </p>
-          </div>
-          
-          <div className="grid grid-cols-2 md:grid-cols-3 lg:grid-cols-6 gap-6">
-            {(categories.length > 0 ? categories : fallbackCategories).map((category, index) => (
-              <Link
-                to={`/category/${category._id || category.name.toLowerCase().replace(/\s+/g, '-')}`}
-                key={category._id || index} 
-                className="bg-white rounded-lg shadow-sm hover:shadow-md transition p-6 flex flex-col items-center group"
-              >
-                <div className="w-20 h-20 bg-primary-50 rounded-full flex items-center justify-center mb-4 group-hover:bg-primary-100 transition">
-                  {category.icon ? (
-                    <span className="text-4xl">{category.icon}</span>
-                  ) : (
-                    <img 
-                      src={category.imageUrl || `/category-icons/${category.name.toLowerCase()}.svg`} 
-                      alt={category.name}
-                      className="h-10 w-10"
-                    />
-                  )}
-                </div>
-                <p className="text-center font-medium text-gray-800 group-hover:text-primary-600 transition">
-                  {category.name}
-                </p>
-              </Link>
-            ))}
-          </div>
-        </div>
-      </section>
+      {/* Featured Categories Section from the new component */}
+      <FeaturedCategories />
       
       {/* Featured Products Section */}
       <section className="py-16 bg-white">
@@ -517,7 +556,7 @@ const HomePage = () => {
               {/* Product image */}
               <div className="w-full md:w-1/2 p-6 md:p-0">
                 <img 
-                  src={dealOfTheDay.imageUrl || '/placeholder-product.jpg'}
+                  src={dealOfTheDay.imageUrl || dealOfTheDay.mainImage || '/placeholder-product.jpg'}
                   alt={dealOfTheDay.name}
                   className="w-full h-auto md:h-[400px] object-cover"
                 />
@@ -543,7 +582,7 @@ const HomePage = () => {
                 </div>
                 
                 <p className="text-gray-600 mb-6">
-                  {dealOfTheDay.description}
+                  {dealOfTheDay.description || dealOfTheDay.shortDescription}
                 </p>
                 
                 <div className="flex items-baseline mb-6">
@@ -576,7 +615,10 @@ const HomePage = () => {
                   </div>
                 )}
                 
-                <Link to={`/product/${dealOfTheDay._id}`} className="w-full sm:w-auto px-6 py-3 bg-red-600 text-white rounded-md hover:bg-red-700 transition flex items-center justify-center">
+                <Link 
+                  to={`/product/${dealOfTheDay.slug || dealOfTheDay._id}`} 
+                  className="w-full sm:w-auto px-6 py-3 bg-red-600 text-white rounded-md hover:bg-red-700 transition flex items-center justify-center"
+                >
                   Shop This Deal
                 </Link>
               </div>
@@ -609,7 +651,7 @@ const HomePage = () => {
           
           <div className="mt-10 text-center">
             <Link 
-              to="/bestsellers" 
+              to="/products?sort=-sales" 
               className="inline-flex items-center px-6 py-3 bg-primary-600 text-white rounded-md hover:bg-primary-700 transition"
             >
               View All Bestsellers
@@ -696,7 +738,7 @@ const HomePage = () => {
               </p>
             </div>
             <Link 
-              to="/new-arrivals" 
+              to="/products?sort=-createdAt" 
               className="hidden md:flex items-center font-medium text-primary-600 hover:text-primary-700"
             >
               View All
@@ -718,7 +760,7 @@ const HomePage = () => {
           
           <div className="mt-8 flex justify-center md:hidden">
             <Link 
-              to="/new-arrivals" 
+              to="/products?sort=-createdAt" 
               className="inline-flex items-center px-4 py-2 bg-primary-600 text-white rounded hover:bg-primary-700 transition"
             >
               View All New Arrivals

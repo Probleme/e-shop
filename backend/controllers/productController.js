@@ -1,126 +1,32 @@
 const Product = require('../models/Product');
 const Category = require('../models/Category');
-const Review = require('../models/Review'); // Assuming you have a Review model
+const Review = require('../models/Review');
 const ErrorResponse = require('../utils/errorResponse');
 const asyncHandler = require('../middleware/async');
 const path = require('path');
-const fs = require('fs').promises;
+const fs = require('fs');
 
-// @desc    Get all products with filtering
+// @desc    Get all products
 // @route   GET /api/products
 // @access  Public
 exports.getProducts = asyncHandler(async (req, res, next) => {
-  // Copy req.query
-  const reqQuery = { ...req.query };
-
-  // Fields to exclude
-  const removeFields = ['select', 'sort', 'page', 'limit', 'search', 'price_min', 'price_max'];
-  removeFields.forEach(param => delete reqQuery[param]);
-
-  // Create operators ($gt, $gte, etc)
-  let queryStr = JSON.stringify(reqQuery);
-  queryStr = queryStr.replace(/\b(gt|gte|lt|lte|in)\b/g, match => `$${match}`);
-  
-  // Build basic query
-  let query = Product.find(JSON.parse(queryStr));
-  
-  // Filter by status if not admin
-  const isAdmin = req.user?.role === 'admin';
-  if (!isAdmin) {
-    query = query.find({ status: 'published' });
-  }
-
-  // Search functionality
-  if (req.query.search) {
-    const searchRegex = new RegExp(req.query.search, 'i');
-    query = query.or([
-      { name: searchRegex }, 
-      { description: searchRegex },
-      { shortDescription: searchRegex },
-      { brand: searchRegex },
-      { tags: searchRegex }
-    ]);
-  }
-
-  // Price range filter
-  if (req.query.price_min || req.query.price_max) {
-    const priceFilter = {};
-    if (req.query.price_min) priceFilter.$gte = parseFloat(req.query.price_min);
-    if (req.query.price_max) priceFilter.$lte = parseFloat(req.query.price_max);
-    query = query.find({ price: priceFilter });
-  }
-
-  // Select specific fields
-  if (req.query.select) {
-    const fields = req.query.select.split(',').join(' ');
-    query = query.select(fields);
-  }
-
-  // Sort
-  if (req.query.sort) {
-    const sortBy = req.query.sort.split(',').join(' ');
-    query = query.sort(sortBy);
-  } else {
-    query = query.sort('-createdAt');
-  }
-
-  // Pagination
-  const page = parseInt(req.query.page, 10) || 1;
-  const limit = parseInt(req.query.limit, 10) || 10;
-  const startIndex = (page - 1) * limit;
-  const endIndex = page * limit;
-  const total = await Product.countDocuments(query.getQuery());
-
-  query = query.skip(startIndex).limit(limit);
-
-  // Populate references
-  query = query.populate({
-    path: 'category',
-    select: 'name slug'
-  }).populate({
-    path: 'subcategory',
-    select: 'name slug'
-  });
-
-  // Execute query
-  const products = await query;
-
-  // Map products to include discount percentage
-  const productsWithDiscount = products.map(product => 
-    Product.getWithDiscountPercentage(product)
-  );
-
-  // Pagination result
-  const pagination = {};
-
-  if (endIndex < total) {
-    pagination.next = { page: page + 1, limit };
-  }
-
-  if (startIndex > 0) {
-    pagination.prev = { page: page - 1, limit };
-  }
-
-  pagination.total = total;
-  pagination.pages = Math.ceil(total / limit);
-  pagination.page = page;
-  pagination.limit = limit;
-
-  res.status(200).json({
-    success: true,
-    count: products.length,
-    pagination,
-    data: productsWithDiscount
-  });
+  res.status(200).json(res.advancedResults);
 });
 
-// @desc    Get single product by ID or slug
+// @desc    Get single product
 // @route   GET /api/products/:id
 // @access  Public
 exports.getProduct = asyncHandler(async (req, res, next) => {
-  const query = req.params.id.match(/^[0-9a-fA-F]{24}$/) 
-    ? { _id: req.params.id }  // If ID format
-    : { slug: req.params.id }; // If slug format
+  // Finding by ID or slug
+  let query;
+  
+  if (req.params.id.match(/^[0-9a-fA-F]{24}$/)) {
+    // It's a valid MongoDB ObjectId, query by _id
+    query = { _id: req.params.id };
+  } else {
+    // It's not a valid ObjectId, assume it's a slug
+    query = { slug: req.params.id };
+  }
   
   const product = await Product.findOne(query)
     .populate({
@@ -128,36 +34,17 @@ exports.getProduct = asyncHandler(async (req, res, next) => {
       select: 'name slug'
     })
     .populate({
-      path: 'subcategory',
-      select: 'name slug'
+      path: 'reviews',
+      select: 'rating text user'
     });
 
   if (!product) {
-    return next(new ErrorResponse(`Product not found with id or slug of ${req.params.id}`, 404));
+    return next(new ErrorResponse(`Product not found with id of ${req.params.id}`, 404));
   }
-
-  // Check if published or user is admin
-  if (product.status !== 'published' && (!req.user || req.user.role !== 'admin')) {
-    return next(new ErrorResponse(`Product not found with id or slug of ${req.params.id}`, 404));
-  }
-
-  // Get reviews
-  const reviews = await Review.find({ product: product._id })
-    .populate({
-      path: 'user',
-      select: 'name avatar'
-    })
-    .sort('-createdAt');
-
-  // Apply discount calculation
-  const productWithDiscount = Product.getWithDiscountPercentage(product);
 
   res.status(200).json({
     success: true,
-    data: {
-      ...productWithDiscount.toJSON(),
-      reviews
-    }
+    data: product
   });
 });
 
@@ -165,34 +52,24 @@ exports.getProduct = asyncHandler(async (req, res, next) => {
 // @route   POST /api/products
 // @access  Private/Admin
 exports.createProduct = asyncHandler(async (req, res, next) => {
-  // Add user to body
-  req.body.user = req.user.id;
-  
-  // Check if category exists
+  // Create slug from name if not provided
+  if (!req.body.slug && req.body.name) {
+    req.body.slug = req.body.name
+      .toLowerCase()
+      .trim()
+      .replace(/[^\w\s-]/g, '')
+      .replace(/[\s_-]+/g, '-')
+      .replace(/^-+|-+$/g, '');
+  }
+
+  // Validate category if provided
   if (req.body.category) {
     const category = await Category.findById(req.body.category);
     if (!category) {
-      return next(new ErrorResponse(`Category with ID ${req.body.category} not found`, 404));
-    }
-  }
-  
-  // Check if subcategory exists
-  if (req.body.subcategory) {
-    const subcategory = await Category.findById(req.body.subcategory);
-    if (!subcategory) {
-      return next(new ErrorResponse(`Subcategory with ID ${req.body.subcategory} not found`, 404));
+      return next(new ErrorResponse(`Category not found with id of ${req.body.category}`, 404));
     }
   }
 
-  // If SKU is provided, check if it's unique
-  if (req.body.sku) {
-    const existingSku = await Product.findOne({ sku: req.body.sku });
-    if (existingSku) {
-      return next(new ErrorResponse('Product with this SKU already exists', 400));
-    }
-  }
-
-  // Create product
   const product = await Product.create(req.body);
 
   res.status(201).json({
@@ -205,42 +82,34 @@ exports.createProduct = asyncHandler(async (req, res, next) => {
 // @route   PUT /api/products/:id
 // @access  Private/Admin
 exports.updateProduct = asyncHandler(async (req, res, next) => {
+  // Create slug from name if name is updated and slug is not provided
+  if (req.body.name && !req.body.slug) {
+    req.body.slug = req.body.name
+      .toLowerCase()
+      .trim()
+      .replace(/[^\w\s-]/g, '')
+      .replace(/[\s_-]+/g, '-')
+      .replace(/^-+|-+$/g, '');
+  }
+
+  // Validate category if provided
+  if (req.body.category) {
+    const category = await Category.findById(req.body.category);
+    if (!category) {
+      return next(new ErrorResponse(`Category not found with id of ${req.body.category}`, 404));
+    }
+  }
+
   let product = await Product.findById(req.params.id);
 
   if (!product) {
     return next(new ErrorResponse(`Product not found with id of ${req.params.id}`, 404));
   }
 
-  // Check if category exists
-  if (req.body.category) {
-    const category = await Category.findById(req.body.category);
-    if (!category) {
-      return next(new ErrorResponse(`Category with ID ${req.body.category} not found`, 404));
-    }
-  }
-
-  // Check if subcategory exists
-  if (req.body.subcategory) {
-    const subcategory = await Category.findById(req.body.subcategory);
-    if (!subcategory) {
-      return next(new ErrorResponse(`Subcategory with ID ${req.body.subcategory} not found`, 404));
-    }
-  }
-
-  // If SKU is changed, check if it's unique
-  if (req.body.sku && req.body.sku !== product.sku) {
-    const existingSku = await Product.findOne({ sku: req.body.sku });
-    if (existingSku) {
-      return next(new ErrorResponse('Product with this SKU already exists', 400));
-    }
-  }
-
-  // Update the product
-  product = await Product.findByIdAndUpdate(
-    req.params.id, 
-    { ...req.body, updatedAt: Date.now() },
-    { new: true, runValidators: true }
-  );
+  product = await Product.findByIdAndUpdate(req.params.id, req.body, {
+    new: true,
+    runValidators: true
+  });
 
   res.status(200).json({
     success: true,
@@ -258,27 +127,36 @@ exports.deleteProduct = asyncHandler(async (req, res, next) => {
     return next(new ErrorResponse(`Product not found with id of ${req.params.id}`, 404));
   }
 
-  // Remove all images associated with the product
-  if (product.mainImage && product.mainImage !== 'no-photo.jpg') {
+  // Delete product images if they exist
+  if (product.mainImage) {
     try {
-      await fs.unlink(path.join(__dirname, '../public/uploads/products', product.mainImage));
+      const imagePath = path.join(__dirname, '../public', product.mainImage.replace(/^\//, ''));
+      if (fs.existsSync(imagePath)) {
+        fs.unlinkSync(imagePath);
+      }
     } catch (err) {
-      console.log('Error removing mainImage:', err);
+      console.error('Error deleting product main image:', err);
     }
   }
 
-  if (product.images && product.images.length > 0) {
-    for (const image of product.images) {
+  // Delete gallery images
+  if (product.gallery && product.gallery.length > 0) {
+    for (const image of product.gallery) {
       try {
-        await fs.unlink(path.join(__dirname, '../public/uploads/products', image));
+        const imagePath = path.join(__dirname, '../public', image.replace(/^\//, ''));
+        if (fs.existsSync(imagePath)) {
+          fs.unlinkSync(imagePath);
+        }
       } catch (err) {
-        console.log('Error removing image:', err);
+        console.error('Error deleting product gallery image:', err);
       }
     }
   }
 
-  // Use remove() to trigger the pre-remove middleware
-  await product.remove();
+  // Delete associated reviews
+  await Review.deleteMany({ product: req.params.id });
+
+  await product.deleteOne();
 
   res.status(200).json({
     success: true,
@@ -286,60 +164,65 @@ exports.deleteProduct = asyncHandler(async (req, res, next) => {
   });
 });
 
-// @desc    Upload product main image
+// @desc    Upload main product image
 // @route   PUT /api/products/:id/main-image
 // @access  Private/Admin
 exports.uploadMainImage = asyncHandler(async (req, res, next) => {
-  const product = await Product.findById(req.params.id);
-
-  if (!product) {
-    return next(new ErrorResponse(`Product not found with id of ${req.params.id}`, 404));
-  }
-
   if (!req.files) {
-    return next(new ErrorResponse('Please upload a file', 400));
+    return next(new ErrorResponse(`Please upload a file`, 400));
   }
 
   const file = req.files.file;
 
   // Make sure the image is a photo
   if (!file.mimetype.startsWith('image')) {
-    return next(new ErrorResponse('Please upload an image file', 400));
+    return next(new ErrorResponse(`Please upload an image file`, 400));
   }
 
-  // Check file size
-  if (file.size > process.env.MAX_FILE_UPLOAD || file.size > 5000000) {
-    return next(new ErrorResponse(`Please upload an image less than ${process.env.MAX_FILE_UPLOAD || '5MB'}`, 400));
+  // Check filesize
+  if (file.size > process.env.MAX_FILE_UPLOAD || 1000000) {
+    return next(
+      new ErrorResponse(
+        `Please upload an image less than ${process.env.MAX_FILE_UPLOAD || 1000000} bytes`,
+        400
+      )
+    );
   }
 
   // Create custom filename
-  const fileName = `product_${product._id}_main_${Date.now()}${path.parse(file.name).ext}`;
+  file.name = `product_${req.params.id}_main${path.parse(file.name).ext}`;
 
-  // Move file to upload location
-  file.mv(`./public/uploads/products/${fileName}`, async (err) => {
+  const product = await Product.findById(req.params.id);
+  if (!product) {
+    return next(new ErrorResponse(`Product not found with id of ${req.params.id}`, 404));
+  }
+
+  // Delete old image if exists
+  if (product.mainImage) {
+    try {
+      const oldImagePath = path.join(__dirname, '../public', product.mainImage.replace(/^\//, ''));
+      if (fs.existsSync(oldImagePath)) {
+        fs.unlinkSync(oldImagePath);
+      }
+    } catch (err) {
+      console.error('Error deleting old product image:', err);
+    }
+  }
+
+  // Upload new file
+  file.mv(`${process.env.FILE_UPLOAD_PATH || './public/uploads'}/products/${file.name}`, async err => {
     if (err) {
       console.error(err);
-      return next(new ErrorResponse('Problem with file upload', 500));
+      return next(new ErrorResponse(`Problem with file upload`, 500));
     }
 
-    // Delete old main image if it exists and it's not the default
-    if (product.mainImage && product.mainImage !== 'no-photo.jpg') {
-      try {
-        await fs.unlink(`./public/uploads/products/${product.mainImage}`);
-      } catch (err) {
-        console.log('Error removing old mainImage:', err);
-      }
-    }
-
-    // Update database
-    await Product.findByIdAndUpdate(req.params.id, { 
-      mainImage: fileName,
-      updatedAt: Date.now()
-    });
+    // Update product with image URL
+    const mainImage = `/uploads/products/${file.name}`;
+    await Product.findByIdAndUpdate(req.params.id, { mainImage });
 
     res.status(200).json({
       success: true,
-      data: fileName
+      data: { mainImage }
     });
   });
 });
@@ -348,108 +231,103 @@ exports.uploadMainImage = asyncHandler(async (req, res, next) => {
 // @route   PUT /api/products/:id/gallery
 // @access  Private/Admin
 exports.uploadGalleryImages = asyncHandler(async (req, res, next) => {
-  const product = await Product.findById(req.params.id);
+  if (!req.files) {
+    return next(new ErrorResponse(`Please upload files`, 400));
+  }
 
+  const product = await Product.findById(req.params.id);
   if (!product) {
     return next(new ErrorResponse(`Product not found with id of ${req.params.id}`, 404));
   }
 
-  if (!req.files || !req.files.files) {
-    return next(new ErrorResponse('Please upload at least one file', 400));
-  }
-
-  // Make sure req.files.files is an array
+  // Make sure files is an array
   const files = Array.isArray(req.files.files) ? req.files.files : [req.files.files];
-  
-  if (files.length > 10) {
-    return next(new ErrorResponse('You can upload maximum 10 images at once', 400));
-  }
 
-  const uploadedFiles = [];
+  // Make sure all files are images
+  for (const file of files) {
+    if (!file.mimetype.startsWith('image')) {
+      return next(new ErrorResponse(`Please upload only image files`, 400));
+    }
+
+    // Check filesize
+    if (file.size > process.env.MAX_FILE_UPLOAD || 1000000) {
+      return next(
+        new ErrorResponse(
+          `Please upload images less than ${process.env.MAX_FILE_UPLOAD || 1000000} bytes`,
+          400
+        )
+      );
+    }
+  }
 
   // Process each file
-  const filePromises = files.map(file => {
-    return new Promise((resolve, reject) => {
-      // Validate file
-      if (!file.mimetype.startsWith('image')) {
-        return reject(new Error(`${file.name} is not an image`));
-      }
+  const galleryImages = [];
+  const uploadPath = `${process.env.FILE_UPLOAD_PATH || './public/uploads'}/products`;
 
-      if (file.size > process.env.MAX_FILE_UPLOAD || file.size > 5000000) {
-        return reject(new Error(`${file.name} exceeds size limit`));
-      }
-
-      // Create custom filename
-      const fileName = `product_${product._id}_gallery_${Date.now()}_${uploadedFiles.length}${path.parse(file.name).ext}`;
-
-      // Move file
-      file.mv(`./public/uploads/products/${fileName}`, async err => {
+  for (let i = 0; i < files.length; i++) {
+    const file = files[i];
+    
+    // Create custom filename
+    file.name = `product_${req.params.id}_gallery_${Date.now()}_${i}${path.parse(file.name).ext}`;
+    
+    // Upload file
+    await new Promise((resolve, reject) => {
+      file.mv(`${uploadPath}/${file.name}`, err => {
         if (err) {
           reject(err);
-        } else {
-          uploadedFiles.push(fileName);
-          resolve();
+          return;
         }
+        resolve();
       });
     });
-  });
-
-  try {
-    await Promise.all(filePromises);
     
-    // Update product with new images
-    const updatedProduct = await Product.findByIdAndUpdate(
-      req.params.id,
-      { 
-        $push: { images: { $each: uploadedFiles } },
-        updatedAt: Date.now()
-      },
-      { new: true }
-    );
-
-    res.status(200).json({
-      success: true,
-      data: updatedProduct.images
-    });
-  } catch (err) {
-    return next(new ErrorResponse(`Error uploading images: ${err.message}`, 500));
+    galleryImages.push(`/uploads/products/${file.name}`);
   }
+
+  // Update product gallery
+  const updatedGallery = [...(product.gallery || []), ...galleryImages];
+  await Product.findByIdAndUpdate(req.params.id, { gallery: updatedGallery });
+
+  res.status(200).json({
+    success: true,
+    data: { gallery: updatedGallery }
+  });
 });
 
-// @desc    Delete product gallery image
+// @desc    Delete gallery image
 // @route   DELETE /api/products/:id/gallery/:imageIndex
 // @access  Private/Admin
 exports.deleteGalleryImage = asyncHandler(async (req, res, next) => {
   const product = await Product.findById(req.params.id);
-
   if (!product) {
     return next(new ErrorResponse(`Product not found with id of ${req.params.id}`, 404));
   }
 
-  const imageIndex = parseInt(req.params.imageIndex);
-  
-  if (isNaN(imageIndex) || imageIndex < 0 || imageIndex >= product.images.length) {
-    return next(new ErrorResponse('Invalid image index', 400));
+  const imageIndex = req.params.imageIndex;
+  if (!product.gallery || !product.gallery[imageIndex]) {
+    return next(new ErrorResponse(`Image not found at index ${imageIndex}`, 404));
   }
 
-  // Get filename to delete
-  const imageToDelete = product.images[imageIndex];
-
-  // Remove from filesystem
+  // Delete the image file
+  const imageUrl = product.gallery[imageIndex];
   try {
-    await fs.unlink(`./public/uploads/products/${imageToDelete}`);
+    const imagePath = path.join(__dirname, '../public', imageUrl.replace(/^\//, ''));
+    if (fs.existsSync(imagePath)) {
+      fs.unlinkSync(imagePath);
+    }
   } catch (err) {
-    console.log('Error removing image from filesystem:', err);
+    console.error('Error deleting gallery image:', err);
   }
 
-  // Remove from product images array
-  product.images.splice(imageIndex, 1);
-  product.updatedAt = Date.now();
-  await product.save();
+  // Remove the image URL from the gallery array
+  const updatedGallery = [...product.gallery];
+  updatedGallery.splice(imageIndex, 1);
+  
+  await Product.findByIdAndUpdate(req.params.id, { gallery: updatedGallery });
 
   res.status(200).json({
     success: true,
-    data: product.images
+    data: { gallery: updatedGallery }
   });
 });
 
@@ -459,41 +337,32 @@ exports.deleteGalleryImage = asyncHandler(async (req, res, next) => {
 exports.getFeaturedProducts = asyncHandler(async (req, res, next) => {
   const limit = parseInt(req.query.limit) || 8;
   
-  const products = await Product.find({ featured: true, status: 'published' })
+  const products = await Product.find({ featured: true, status: 'active' })
     .limit(limit)
-    .select('name price originalPrice mainImage slug rating reviewCount')
-    .sort('-updatedAt');
-
-  const productsWithDiscount = products.map(product => 
-    Product.getWithDiscountPercentage(product)
-  );
+    .populate('category', 'name slug');
 
   res.status(200).json({
     success: true,
-    count: productsWithDiscount.length,
-    data: productsWithDiscount
+    count: products.length,
+    data: products
   });
 });
 
-// @desc    Get best sellers
+// @desc    Get best selling products
 // @route   GET /api/products/best-sellers
 // @access  Public
 exports.getBestSellers = asyncHandler(async (req, res, next) => {
   const limit = parseInt(req.query.limit) || 8;
   
-  const products = await Product.find({ isBestSeller: true, status: 'published' })
+  const products = await Product.find({ status: 'active' })
+    .sort({ sales: -1 })
     .limit(limit)
-    .select('name price originalPrice mainImage slug rating reviewCount')
-    .sort('-updatedAt');
-
-  const productsWithDiscount = products.map(product => 
-    Product.getWithDiscountPercentage(product)
-  );
+    .populate('category', 'name slug');
 
   res.status(200).json({
     success: true,
-    count: productsWithDiscount.length,
-    data: productsWithDiscount
+    count: products.length,
+    data: products
   });
 });
 
@@ -503,19 +372,15 @@ exports.getBestSellers = asyncHandler(async (req, res, next) => {
 exports.getNewArrivals = asyncHandler(async (req, res, next) => {
   const limit = parseInt(req.query.limit) || 8;
   
-  const products = await Product.find({ isNewArrival: true, status: 'published' })
+  const products = await Product.find({ status: 'active' })
+    .sort({ createdAt: -1 })
     .limit(limit)
-    .select('name price originalPrice mainImage slug rating reviewCount')
-    .sort('-createdAt');
-
-  const productsWithDiscount = products.map(product => 
-    Product.getWithDiscountPercentage(product)
-  );
+    .populate('category', 'name slug');
 
   res.status(200).json({
     success: true,
-    count: productsWithDiscount.length,
-    data: productsWithDiscount
+    count: products.length,
+    data: products
   });
 });
 
@@ -523,34 +388,96 @@ exports.getNewArrivals = asyncHandler(async (req, res, next) => {
 // @route   GET /api/products/deal-of-the-day
 // @access  Public
 exports.getDealOfTheDay = asyncHandler(async (req, res, next) => {
-  const now = new Date();
-  
-  const deal = await Product.findOne({ 
-    isDealOfTheDay: true, 
-    status: 'published',
-    $or: [
-      { dealExpiresAt: { $gt: now } },
-      { dealExpiresAt: null }
-    ]
+  // Find a product with the biggest discount percentage
+  const products = await Product.find({
+    status: 'active',
+    originalPrice: { $gt: 0 },
+    price: { $gt: 0 }
   })
-  .populate({
-    path: 'category',
-    select: 'name slug'
-  });
+    .sort({ discount: -1 })
+    .limit(1)
+    .populate('category', 'name slug');
 
-  if (!deal) {
-    return res.status(404).json({
-      success: false,
-      error: 'No active deal of the day found'
-    });
+  let dealProduct = null;
+  if (products.length > 0) {
+    dealProduct = products[0];
+    
+    // Add a default expiry date for the deal (24 hours from now)
+    dealProduct = {
+      ...dealProduct.toObject(),
+      expiresAt: new Date(Date.now() + 24 * 60 * 60 * 1000)
+    };
   }
-
-  // Apply discount calculation
-  const dealWithDiscount = Product.getWithDiscountPercentage(deal);
 
   res.status(200).json({
     success: true,
-    data: dealWithDiscount
+    data: dealProduct
+  });
+});
+
+// @desc    Get products by category
+// @route   GET /api/products/category/:categoryId
+// @access  Public
+exports.getProductsByCategory = asyncHandler(async (req, res, next) => {
+  // Get the category and its subcategories
+  const category = await Category.findById(req.params.categoryId);
+  
+  if (!category) {
+    return next(new ErrorResponse(`Category not found with id of ${req.params.categoryId}`, 404));
+  }
+  
+  // Find all subcategories (recursively)
+  const getSubcategoryIds = async (categoryId) => {
+    const directSubcategories = await Category.find({ parent: categoryId });
+    let allIds = [categoryId];
+    
+    for (const subcat of directSubcategories) {
+      const subcategoryIds = await getSubcategoryIds(subcat._id);
+      allIds = [...allIds, ...subcategoryIds];
+    }
+    
+    return allIds;
+  };
+  
+  const categoryIds = await getSubcategoryIds(req.params.categoryId);
+  
+  // Set up pagination
+  const page = parseInt(req.query.page, 10) || 1;
+  const limit = parseInt(req.query.limit, 10) || 12;
+  const startIndex = (page - 1) * limit;
+  
+  // Set up sorting
+  let sortBy = {};
+  if (req.query.sort) {
+    const sortField = req.query.sort.startsWith('-') ? 
+      req.query.sort.substring(1) : req.query.sort;
+    const sortDirection = req.query.sort.startsWith('-') ? -1 : 1;
+    sortBy[sortField] = sortDirection;
+  } else {
+    sortBy = { createdAt: -1 };
+  }
+  
+  // Execute query with pagination
+  const total = await Product.countDocuments({ category: { $in: categoryIds }, status: 'active' });
+  const products = await Product.find({ category: { $in: categoryIds }, status: 'active' })
+    .sort(sortBy)
+    .skip(startIndex)
+    .limit(limit)
+    .populate('category', 'name slug');
+  
+  // Pagination result
+  const pagination = {
+    page,
+    limit,
+    total,
+    pages: Math.ceil(total / limit)
+  };
+  
+  res.status(200).json({
+    success: true,
+    pagination,
+    count: products.length,
+    data: products
   });
 });
 
@@ -563,27 +490,22 @@ exports.getRelatedProducts = asyncHandler(async (req, res, next) => {
   if (!product) {
     return next(new ErrorResponse(`Product not found with id of ${req.params.id}`, 404));
   }
-
+  
   const limit = parseInt(req.query.limit) || 4;
   
-  // Find products in same category, excluding current product
+  // Find products in the same category, excluding the current product
   const relatedProducts = await Product.find({
-    _id: { $ne: product._id },
+    _id: { $ne: req.params.id },
     category: product.category,
-    status: 'published'
+    status: 'active'
   })
     .limit(limit)
-    .select('name price originalPrice mainImage slug rating reviewCount')
-    .sort('-rating');
-
-  const productsWithDiscount = relatedProducts.map(product => 
-    Product.getWithDiscountPercentage(product)
-  );
-
+    .populate('category', 'name slug');
+  
   res.status(200).json({
     success: true,
-    count: productsWithDiscount.length,
-    data: productsWithDiscount
+    count: relatedProducts.length,
+    data: relatedProducts
   });
 });
 
@@ -591,26 +513,19 @@ exports.getRelatedProducts = asyncHandler(async (req, res, next) => {
 // @route   PUT /api/products/:id/stock
 // @access  Private/Admin
 exports.updateStock = asyncHandler(async (req, res, next) => {
-  const { stock } = req.body;
+  const product = await Product.findById(req.params.id);
   
-  if (stock === undefined || isNaN(stock) || stock < 0) {
-    return next(new ErrorResponse('Please provide a valid stock quantity', 400));
-  }
-
-  const product = await Product.findByIdAndUpdate(
-    req.params.id,
-    { 
-      stock,
-      status: stock > 0 ? (product?.status === 'out_of_stock' ? 'published' : product?.status) : 'out_of_stock',
-      updatedAt: Date.now() 
-    },
-    { new: true }
-  );
-
   if (!product) {
     return next(new ErrorResponse(`Product not found with id of ${req.params.id}`, 404));
   }
-
+  
+  if (!req.body.stock && req.body.stock !== 0) {
+    return next(new ErrorResponse(`Please provide stock value`, 400));
+  }
+  
+  product.stock = req.body.stock;
+  await product.save();
+  
   res.status(200).json({
     success: true,
     data: product
@@ -621,288 +536,122 @@ exports.updateStock = asyncHandler(async (req, res, next) => {
 // @route   PUT /api/products/:id/status
 // @access  Private/Admin
 exports.updateStatus = asyncHandler(async (req, res, next) => {
-  const { status } = req.body;
-  
-  if (!status || !['draft', 'published', 'archived', 'out_of_stock'].includes(status)) {
-    return next(new ErrorResponse('Please provide a valid status', 400));
-  }
-
   const product = await Product.findById(req.params.id);
   
   if (!product) {
     return next(new ErrorResponse(`Product not found with id of ${req.params.id}`, 404));
   }
-
-  // If setting to out_of_stock, also set stock to 0
-  if (status === 'out_of_stock' && product.stock > 0) {
-    product.stock = 0;
+  
+  if (!req.body.status || !['active', 'inactive', 'draft'].includes(req.body.status)) {
+    return next(new ErrorResponse(`Invalid status value`, 400));
   }
   
-  // If setting to published but stock is 0, prevent that
-  if (status === 'published' && product.stock <= 0) {
-    return next(new ErrorResponse('Cannot set product with 0 stock to published status', 400));
-  }
-
-  product.status = status;
-  product.updatedAt = Date.now();
+  product.status = req.body.status;
   await product.save();
-
+  
   res.status(200).json({
     success: true,
     data: product
   });
 });
 
-// @desc    Get products by category
-// @route   GET /api/products/category/:categoryId
-// @access  Public
-exports.getProductsByCategory = asyncHandler(async (req, res, next) => {
-  const { categoryId } = req.params;
-
-  // Check if category exists
-  const category = await Category.findById(categoryId);
-  if (!category) {
-    return next(new ErrorResponse(`Category not found with id of ${categoryId}`, 404));
-  }
-
-  // Copy req.query for filtering
-  const reqQuery = { ...req.query };
-  const removeFields = ['select', 'sort', 'page', 'limit', 'search'];
-  removeFields.forEach(param => delete reqQuery[param]);
-
-  // Add category filter
-  reqQuery.category = categoryId;
-
-  // Build query string with operators ($gt, $gte, etc)
-  let queryStr = JSON.stringify(reqQuery);
-  queryStr = queryStr.replace(/\b(gt|gte|lt|lte|in)\b/g, match => `$${match}`);
-  
-  // Build base query
-  let query = Product.find({
-    ...JSON.parse(queryStr),
-    status: 'published'
-  });
-
-  // Add search if provided
-  if (req.query.search) {
-    const searchRegex = new RegExp(req.query.search, 'i');
-    query = query.or([
-      { name: searchRegex }, 
-      { description: searchRegex },
-      { shortDescription: searchRegex },
-      { brand: searchRegex },
-      { tags: searchRegex }
-    ]);
-  }
-
-  // Select fields if specified
-  if (req.query.select) {
-    const fields = req.query.select.split(',').join(' ');
-    query = query.select(fields);
-  }
-
-  // Sort products
-  if (req.query.sort) {
-    const sortBy = req.query.sort.split(',').join(' ');
-    query = query.sort(sortBy);
-  } else {
-    query = query.sort('-createdAt');
-  }
-
-  // Pagination
-  const page = parseInt(req.query.page, 10) || 1;
-  const limit = parseInt(req.query.limit, 10) || 12;
-  const startIndex = (page - 1) * limit;
-  const total = await Product.countDocuments(query.getQuery());
-
-  query = query.skip(startIndex).limit(limit);
-
-  // Execute query
-  const products = await query;
-  
-  // Apply discount calculation
-  const productsWithDiscount = products.map(product => 
-    Product.getWithDiscountPercentage(product)
-  );
-
-  // Pagination object
-  const pagination = {
-    page,
-    limit,
-    total,
-    pages: Math.ceil(total / limit)
-  };
-
-  if (startIndex > 0) {
-    pagination.prev = { page: page - 1, limit };
-  }
-
-  if (startIndex + products.length < total) {
-    pagination.next = { page: page + 1, limit };
-  }
-
-  res.status(200).json({
-    success: true,
-    count: products.length,
-    pagination,
-    category: {
-      id: category._id,
-      name: category.name,
-      slug: category.slug
-    },
-    data: productsWithDiscount
-  });
-});
-
-// @desc    Add variant to product
+// @desc    Add product variant
 // @route   POST /api/products/:id/variants
 // @access  Private/Admin
 exports.addVariant = asyncHandler(async (req, res, next) => {
   const product = await Product.findById(req.params.id);
-
+  
   if (!product) {
     return next(new ErrorResponse(`Product not found with id of ${req.params.id}`, 404));
   }
-
-  const { name, options, values } = req.body;
-
-  if (!name || !options || !values) {
-    return next(new ErrorResponse('Please provide name, options, and values for variant', 400));
+  
+  // Initialize variants array if it doesn't exist
+  if (!product.variants) {
+    product.variants = [];
   }
-
-  // Add new variant
-  product.variants.push({
-    name,
-    options,
-    values
-  });
-
-  // If product has variants, update main price to lowest variant price
-  const allPrices = [
-    ...product.variants.flatMap(v => 
-      v.values.map(val => val.price).filter(p => p !== undefined && p !== null)
-    ),
-    product.price
-  ].filter(p => p > 0);
-
-  if (allPrices.length > 0) {
-    product.price = Math.min(...allPrices);
-  }
-
-  product.updatedAt = Date.now();
+  
+  product.variants.push(req.body);
   await product.save();
-
+  
   res.status(200).json({
     success: true,
     data: product
   });
 });
 
-// @desc    Update variant
+// @desc    Update product variant
 // @route   PUT /api/products/:id/variants/:variantIndex
 // @access  Private/Admin
 exports.updateVariant = asyncHandler(async (req, res, next) => {
   const product = await Product.findById(req.params.id);
-
+  
   if (!product) {
     return next(new ErrorResponse(`Product not found with id of ${req.params.id}`, 404));
   }
-
+  
   const variantIndex = parseInt(req.params.variantIndex);
   
-  if (isNaN(variantIndex) || variantIndex < 0 || variantIndex >= product.variants.length) {
-    return next(new ErrorResponse('Invalid variant index', 400));
+  if (!product.variants || !product.variants[variantIndex]) {
+    return next(new ErrorResponse(`Variant not found at index ${variantIndex}`, 404));
   }
-
-  const { name, options, values } = req.body;
-
-  // Update variant fields
-  if (name) product.variants[variantIndex].name = name;
-  if (options) product.variants[variantIndex].options = options;
-  if (values) product.variants[variantIndex].values = values;
-
-  // If product has variants, update main price to lowest variant price
-  const allPrices = [
-    ...product.variants.flatMap(v => 
-      v.values.map(val => val.price).filter(p => p !== undefined && p !== null)
-    ),
-    product.price
-  ].filter(p => p > 0);
-
-  if (allPrices.length > 0) {
-    product.price = Math.min(...allPrices);
-  }
-
-  product.updatedAt = Date.now();
+  
+  // Update the variant at the specified index
+  product.variants[variantIndex] = {
+    ...product.variants[variantIndex],
+    ...req.body
+  };
+  
   await product.save();
-
+  
   res.status(200).json({
     success: true,
     data: product
   });
 });
 
-// @desc    Delete variant
+// @desc    Delete product variant
 // @route   DELETE /api/products/:id/variants/:variantIndex
 // @access  Private/Admin
 exports.deleteVariant = asyncHandler(async (req, res, next) => {
   const product = await Product.findById(req.params.id);
-
+  
   if (!product) {
     return next(new ErrorResponse(`Product not found with id of ${req.params.id}`, 404));
   }
-
+  
   const variantIndex = parseInt(req.params.variantIndex);
   
-  if (isNaN(variantIndex) || variantIndex < 0 || variantIndex >= product.variants.length) {
-    return next(new ErrorResponse('Invalid variant index', 400));
+  if (!product.variants || !product.variants[variantIndex]) {
+    return next(new ErrorResponse(`Variant not found at index ${variantIndex}`, 404));
   }
-
-  // Remove variant
+  
+  // Remove the variant at the specified index
   product.variants.splice(variantIndex, 1);
-
-  // If product has variants, update main price to lowest variant price
-  const allPrices = [
-    ...product.variants.flatMap(v => 
-      v.values.map(val => val.price).filter(p => p !== undefined && p !== null)
-    ),
-    product.price
-  ].filter(p => p > 0);
-
-  if (allPrices.length > 0) {
-    product.price = Math.min(...allPrices);
-  }
-
-  product.updatedAt = Date.now();
   await product.save();
-
+  
   res.status(200).json({
     success: true,
     data: product
   });
 });
 
-// @desc    Add or update product specifications
+// @desc    Update product specifications
 // @route   PUT /api/products/:id/specifications
 // @access  Private/Admin
 exports.updateSpecifications = asyncHandler(async (req, res, next) => {
   const product = await Product.findById(req.params.id);
-
+  
   if (!product) {
     return next(new ErrorResponse(`Product not found with id of ${req.params.id}`, 404));
   }
-
-  const { specifications } = req.body;
-
-  if (!specifications || !Array.isArray(specifications)) {
-    return next(new ErrorResponse('Please provide specifications array', 400));
+  
+  if (!Array.isArray(req.body.specifications)) {
+    return next(new ErrorResponse(`Specifications should be an array`, 400));
   }
-
-  // Update specifications
-  product.specifications = specifications;
-  product.updatedAt = Date.now();
+  
+  product.specifications = req.body.specifications;
   await product.save();
-
+  
   res.status(200).json({
     success: true,
     data: product
